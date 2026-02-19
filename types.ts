@@ -6,6 +6,17 @@ export interface Currency {
   image?: string;
   change24h?: number;
   marketCap?: number;
+  volume24h?: number;
+  high24h?: number;
+  low24h?: number;
+}
+
+export interface User {
+  name: string;
+  email: string;
+  avatar?: string;
+  memberSince: string;
+  id: string;
 }
 
 export interface ConversionState {
@@ -41,6 +52,30 @@ export interface CoinGeckoAsset {
   atl_change_percentage: number;
   atl_date: string;
   last_updated: string;
+}
+
+export interface BinanceTicker {
+  symbol: string;
+  priceChange: string;
+  priceChangePercent: string;
+  weightedAvgPrice: string;
+  prevClosePrice: string;
+  lastPrice: string;
+  lastQty: string;
+  bidPrice: string;
+  bidQty: string;
+  askPrice: string;
+  askQty: string;
+  openPrice: string;
+  highPrice: string;
+  lowPrice: string;
+  volume: string;
+  quoteVolume: string;
+  openTime: number;
+  closeTime: number;
+  firstId: number;
+  lastId: number;
+  count: number;
 }
 
 export interface FiatApiResponse {

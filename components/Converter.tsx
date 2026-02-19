@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ArrowDown, Settings, Info, RefreshCw, Clock, AlertTriangle } from 'lucide-react';
+import { ArrowDown, Settings, Info, RefreshCw, Clock, AlertTriangle, Wallet } from 'lucide-react';
 import { Currency } from '../types';
 
 interface ConverterProps {
@@ -8,12 +8,14 @@ interface ConverterProps {
   onRefresh: () => void;
   isLoading: boolean;
   isFallback: boolean;
+  onNotify: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, onRefresh, isLoading, isFallback }) => {
+export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, onRefresh, isLoading, isFallback, onNotify }) => {
   const [amount, setAmount] = useState<number>(1);
   const [fromCode, setFromCode] = useState<string>('USD');
   const [toCode, setToCode] = useState<string>('BTC');
+  const [isWalletConnected, setIsWalletConnected] = useState(false);
   
   const sortedCurrencies = useMemo(() => {
     return [...currencies].sort((a, b) => {
@@ -39,6 +41,16 @@ export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, o
   const handleSwap = () => {
     setFromCode(toCode);
     setToCode(fromCode);
+  };
+
+  const handleConnectWallet = () => {
+    if (!isWalletConnected) {
+      setIsWalletConnected(true);
+      onNotify("Wallet connected successfully", "success");
+    } else {
+      setIsWalletConnected(false);
+      onNotify("Wallet disconnected", "info");
+    }
   };
 
   const formatResult = (val: number) => {
@@ -197,9 +209,25 @@ export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, o
           </div>
         )}
 
-        <button className="w-full mt-6 bg-gradient-to-r from-exchango-accent to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-black font-bold text-lg py-4 rounded-2xl transition-all shadow-[0_0_20px_rgba(0,209,255,0.2)] hover:shadow-[0_0_30px_rgba(0,209,255,0.4)] active:scale-[0.98] relative overflow-hidden group">
-          <span className="relative z-10">Connect Wallet</span>
-          <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+        <button 
+          onClick={handleConnectWallet}
+          className={`w-full mt-6 font-bold text-lg py-4 rounded-2xl transition-all shadow-lg active:scale-[0.98] relative overflow-hidden group flex items-center justify-center gap-2 ${
+            isWalletConnected 
+            ? 'bg-[#1E232E] text-white border border-white/10' 
+            : 'bg-gradient-to-r from-exchango-accent to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-black shadow-[0_0_20px_rgba(0,209,255,0.2)] hover:shadow-[0_0_30px_rgba(0,209,255,0.4)]'
+          }`}
+        >
+          {isWalletConnected ? (
+            <>
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+              <span>0x71...3A9B</span>
+            </>
+          ) : (
+            <>
+              <span className="relative z-10">Connect Wallet</span>
+              <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+            </>
+          )}
         </button>
       </div>
     </div>
