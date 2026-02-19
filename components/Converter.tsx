@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ArrowDown, Settings, Info, RefreshCw, Clock } from 'lucide-react';
+import { ArrowDown, Settings, Info, RefreshCw, Clock, AlertTriangle } from 'lucide-react';
 import { Currency } from '../types';
 
 interface ConverterProps {
@@ -7,16 +7,16 @@ interface ConverterProps {
   lastUpdated: Date | null;
   onRefresh: () => void;
   isLoading: boolean;
+  isFallback: boolean;
 }
 
-export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, onRefresh, isLoading }) => {
+export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, onRefresh, isLoading, isFallback }) => {
   const [amount, setAmount] = useState<number>(1);
   const [fromCode, setFromCode] = useState<string>('USD');
   const [toCode, setToCode] = useState<string>('BTC');
   
   const sortedCurrencies = useMemo(() => {
     return [...currencies].sort((a, b) => {
-      // Put commonly used currencies first (optional logic, relying on array order for now)
       if (a.type === b.type) return a.code.localeCompare(b.code);
       return a.type === 'fiat' ? -1 : 1;
     });
@@ -90,7 +90,6 @@ export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, o
             />
             
             <div className="relative shrink-0 group/select">
-               {/* Visual Display of Select */}
                <div className="flex items-center gap-2 bg-white/5 group-hover/select:bg-white/10 border border-white/5 rounded-full pl-2 pr-4 py-2 cursor-pointer transition-all">
                   {fromCurrency?.image ? (
                     <img src={fromCurrency.image} alt={fromCode} className="w-6 h-6 rounded-full object-cover" />
@@ -101,7 +100,6 @@ export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, o
                   <ArrowDown size={14} className="text-gray-400" />
                </div>
 
-               {/* Hidden Real Select */}
                <select
                  value={fromCode}
                  onChange={(e) => setFromCode(e.target.value)}
@@ -143,7 +141,6 @@ export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, o
              </div>
              
              <div className="relative shrink-0 group/select">
-               {/* Visual Display */}
                <div className="flex items-center gap-2 bg-white/5 group-hover/select:bg-white/10 border border-white/5 rounded-full pl-2 pr-4 py-2 cursor-pointer transition-all">
                   {toCurrency?.image ? (
                     <img src={toCurrency.image} alt={toCode} className="w-6 h-6 rounded-full object-cover" />
@@ -154,7 +151,6 @@ export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, o
                   <ArrowDown size={14} className="text-gray-400" />
                </div>
 
-               {/* Real Select */}
                <select
                  value={toCode}
                  onChange={(e) => setToCode(e.target.value)}
@@ -176,19 +172,30 @@ export const Converter: React.FC<ConverterProps> = ({ currencies, lastUpdated, o
           </div>
         </div>
 
-        {/* Rate Info */}
-        <div className="mt-4 px-3 py-3 rounded-xl bg-exchango-accent/5 border border-exchango-accent/10 flex justify-between items-center">
-           <div className="flex items-center gap-2 text-exchango-accent text-sm font-semibold">
-             <Info size={16} />
+        {/* Rate Info & Fallback Warning */}
+        <div className={`mt-4 px-3 py-3 rounded-xl border flex justify-between items-center transition-colors ${
+          isFallback 
+            ? 'bg-yellow-500/10 border-yellow-500/20' 
+            : 'bg-exchango-accent/5 border-exchango-accent/10'
+        }`}>
+           <div className={`flex items-center gap-2 text-sm font-semibold ${isFallback ? 'text-yellow-500' : 'text-exchango-accent'}`}>
+             {isFallback ? <AlertTriangle size={16} /> : <Info size={16} />}
              <span>1 {fromCode} = {formatResult(exchangeRate)} {toCode}</span>
            </div>
-           {lastUpdated && (
-             <div className="flex items-center gap-1.5 text-xs text-gray-500">
-               <Clock size={12} />
-               <span>Updated {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-             </div>
-           )}
+           
+           <div className="flex items-center gap-1.5 text-xs text-gray-500">
+             <Clock size={12} />
+             <span>{lastUpdated ? lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</span>
+           </div>
         </div>
+        
+        {isFallback && (
+          <div className="mt-2 text-center">
+            <span className="text-[10px] text-yellow-500/70 font-medium uppercase tracking-wide">
+              Live API Limit Reached • Showing Cached Data
+            </span>
+          </div>
+        )}
 
         <button className="w-full mt-6 bg-gradient-to-r from-exchango-accent to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-black font-bold text-lg py-4 rounded-2xl transition-all shadow-[0_0_20px_rgba(0,209,255,0.2)] hover:shadow-[0_0_30px_rgba(0,209,255,0.4)] active:scale-[0.98] relative overflow-hidden group">
           <span className="relative z-10">Connect Wallet</span>

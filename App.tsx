@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Hero } from './components/Hero';
 import { Converter } from './components/Converter';
 import { MarketTable } from './components/MarketTable';
@@ -6,7 +6,7 @@ import { Logo } from './components/Logo';
 import { Currency } from './types';
 import { fetchCryptoRates, fetchFiatRates } from './services/api';
 import { REFRESH_INTERVAL, MAJOR_FIAT_CURRENCIES } from './constants';
-import { Github, Twitter } from 'lucide-react';
+import { Github, Twitter, WifiOff } from 'lucide-react';
 
 const App: React.FC = () => {
   const [allCurrencies, setAllCurrencies] = useState<Currency[]>([]);
@@ -14,35 +14,49 @@ const App: React.FC = () => {
   const [fiatCurrencies, setFiatCurrencies] = useState<Currency[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [isFallback, setIsFallback] = useState<boolean>(false);
+  
+  // Concurrency control to prevent duplicate requests
+  const isFetchingRef = useRef(false);
 
-  const loadData = useCallback(async () => {
-    if (!lastUpdated) setLoading(true);
+  const loadData = useCallback(async (isInitial = false) => {
+    if (isFetchingRef.current) return;
+    
+    isFetchingRef.current = true;
+    if (isInitial) setLoading(true);
     
     try {
-      const [fiatData, cryptoData] = await Promise.all([
+      // Parallel robust fetching
+      const [fiatRes, cryptoRes] = await Promise.all([
         fetchFiatRates(),
         fetchCryptoRates()
       ]);
 
-      const enrichedFiat = fiatData.map(c => {
+      const enrichedFiat = fiatRes.data.map(c => {
         const major = MAJOR_FIAT_CURRENCIES.find(m => m.code === c.code);
         return major ? { ...c, name: major.name } : c;
       });
 
       setFiatCurrencies(enrichedFiat);
-      setCryptoCurrencies(cryptoData);
-      setAllCurrencies([...enrichedFiat, ...cryptoData]);
+      setCryptoCurrencies(cryptoRes.data);
+      setAllCurrencies([...enrichedFiat, ...cryptoRes.data]);
+      
+      // Determine if we are in fallback mode
+      const isFallbackData = fiatRes.isFallback || cryptoRes.isFallback;
+      setIsFallback(isFallbackData);
+      
       setLastUpdated(new Date());
     } catch (error) {
-      console.error("Data fetch error:", error);
+      console.error("Critical Data Error:", error);
     } finally {
       setLoading(false);
+      isFetchingRef.current = false;
     }
-  }, [lastUpdated]);
+  }, []);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, REFRESH_INTERVAL);
+    loadData(true);
+    const interval = setInterval(() => loadData(false), REFRESH_INTERVAL);
     return () => clearInterval(interval);
   }, [loadData]);
 
@@ -89,6 +103,14 @@ const App: React.FC = () => {
         </div>
       </nav>
 
+      {/* Fallback Banner */}
+      {isFallback && (
+        <div className="fixed bottom-0 left-0 w-full bg-yellow-600/20 backdrop-blur-md border-t border-yellow-500/20 z-50 py-2 px-4 flex items-center justify-center gap-2 text-yellow-500 text-xs font-bold uppercase tracking-widest animate-fade-in-up">
+          <WifiOff size={14} />
+          <span>Live updates paused - Displaying cached market data</span>
+        </div>
+      )}
+
       <main className="flex-grow pt-24 relative">
         <Hero />
         
@@ -96,8 +118,9 @@ const App: React.FC = () => {
           <Converter 
             currencies={allCurrencies} 
             lastUpdated={lastUpdated} 
-            onRefresh={loadData}
+            onRefresh={() => loadData(false)}
             isLoading={loading}
+            isFallback={isFallback}
           />
         </div>
 
