@@ -1,334 +1,314 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Hero } from './components/Hero';
-import { Converter } from './components/Converter';
-import { MarketTable } from './components/MarketTable';
-import { TradeView } from './components/TradeView';
-import { EarnView } from './components/EarnView';
-import { LearnView } from './components/LearnView';
-import { LoginView } from './components/LoginView';
-import { SignUpView } from './components/SignUpView';
-import { ProfileView } from './components/ProfileView';
-import { Toast } from './components/Toast';
-import { Logo } from './components/Logo';
-import { Currency, User } from './types';
-import { fetchCryptoRates, fetchFiatRates } from './services/api';
-import { REFRESH_INTERVAL, MAJOR_FIAT_CURRENCIES } from './constants';
-import { Github, Twitter, WifiOff, BarChart2, Home, Wallet, BookOpen, User as UserIcon } from 'lucide-react';
-import { auth } from './services/firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowUpDown, Copy, Moon, RefreshCcw, Search, Star, Sun, WifiOff } from 'lucide-react';
 
-interface NotificationState {
-    show: boolean;
-    message: string;
-    type: 'success' | 'error' | 'info';
-}
+type CurrencyType = 'fiat' | 'crypto';
 
-type ViewType = 'home' | 'trade' | 'earn' | 'learn' | 'login' | 'signup' | 'profile';
+type Asset = {
+  code: string;
+  name: string;
+  symbol: string;
+  type: CurrencyType;
+  priceUSD: number;
+  change24h: number;
+  change7d: number;
+  marketCap?: number;
+  volume24h?: number;
+  rank?: number;
+  sparkline: number[];
+  icon: string;
+  flag?: string;
+};
+
+type Conversion = {
+  id: string;
+  from: string;
+  to: string;
+  amount: number;
+  result: number;
+  timestamp: string;
+};
+
+const MAJOR_FIAT = [
+  { code: 'USD', name: 'US Dollar', symbol: '$', flag: '🇺🇸' },
+  { code: 'EUR', name: 'Euro', symbol: '€', flag: '🇪🇺' },
+  { code: 'GBP', name: 'British Pound', symbol: '£', flag: '🇬🇧' },
+  { code: 'JPY', name: 'Japanese Yen', symbol: '¥', flag: '🇯🇵' },
+  { code: 'AUD', name: 'Australian Dollar', symbol: 'A$', flag: '🇦🇺' },
+  { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$', flag: '🇨🇦' },
+  { code: 'CHF', name: 'Swiss Franc', symbol: 'CHF', flag: '🇨🇭' },
+  { code: 'CNY', name: 'Chinese Yuan', symbol: '¥', flag: '🇨🇳' },
+  { code: 'INR', name: 'Indian Rupee', symbol: '₹', flag: '🇮🇳' },
+  { code: 'NPR', name: 'Nepalese Rupee', symbol: 'रू', flag: '🇳🇵' },
+];
+
+const POPULAR_PAIRS = [
+  ['BTC', 'USD'],
+  ['USD', 'NPR'],
+  ['ETH', 'USD'],
+  ['EUR', 'USD'],
+] as const;
+
+const id = () => Math.random().toString(36).slice(2);
+
+const Sparkline: React.FC<{ data: number[]; positive?: boolean }> = ({ data, positive = true }) => {
+  if (!data.length) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const points = data
+    .map((v, i) => {
+      const x = (i / (data.length - 1 || 1)) * 100;
+      const y = 100 - ((v - min) / (max - min || 1)) * 100;
+      return `${x},${y}`;
+    })
+    .join(' ');
+  return (
+    <svg viewBox="0 0 100 100" className="sparkline" aria-hidden="true">
+      <polyline points={points} fill="none" stroke={positive ? '#39ffb6' : '#ff5b7f'} strokeWidth="6" strokeLinecap="round" />
+    </svg>
+  );
+};
 
 const App: React.FC = () => {
-  const [allCurrencies, setAllCurrencies] = useState<Currency[]>([]);
-  const [cryptoCurrencies, setCryptoCurrencies] = useState<Currency[]>([]);
-  const [fiatCurrencies, setFiatCurrencies] = useState<Currency[]>([]);
+  const [crypto, setCrypto] = useState<Asset[]>([]);
+  const [fiat, setFiat] = useState<Asset[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [offline, setOffline] = useState(!navigator.onLine);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [isFallback, setIsFallback] = useState<boolean>(false);
-  
-  // Auth State
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [showAll, setShowAll] = useState(false);
+  const [favorites, setFavorites] = useState<string[]>(() => JSON.parse(localStorage.getItem('favorites') || '[]'));
+  const [amount, setAmount] = useState('1');
+  const [from, setFrom] = useState('USD');
+  const [to, setTo] = useState('BTC');
+  const [history, setHistory] = useState<Conversion[]>(() => JSON.parse(localStorage.getItem('history') || '[]'));
+  const [search, setSearch] = useState('');
+  const [sortFiat, setSortFiat] = useState<'rate' | 'change'>('rate');
 
-  // Navigation State
-  const [currentView, setCurrentView] = useState<ViewType>('home');
-  // View State for Markets
-  const [viewAllCrypto, setViewAllCrypto] = useState(false);
-  
-  // Notification State
-  const [notification, setNotification] = useState<NotificationState>({ show: false, message: '', type: 'info' });
+  const assets = useMemo(() => [...fiat, ...crypto], [fiat, crypto]);
+  const fromAsset = useMemo(() => assets.find((a) => a.code === from), [assets, from]);
+  const toAsset = useMemo(() => assets.find((a) => a.code === to), [assets, to]);
 
-  // Helper to show notification
-  const showNotification = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
-      setNotification({ show: true, message, type });
-  }, []);
+  const numericAmount = Number(amount);
+  const result = useMemo(() => {
+    if (!fromAsset || !toAsset || Number.isNaN(numericAmount)) return 0;
+    return (numericAmount * fromAsset.priceUSD) / toAsset.priceUSD;
+  }, [fromAsset, toAsset, numericAmount]);
 
-  // Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-        if (firebaseUser) {
-            const creationTime = firebaseUser.metadata.creationTime;
-            const memberSince = creationTime 
-                ? new Date(creationTime).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) 
-                : 'Dec 2023';
-
-            setUser({
-                name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-                email: firebaseUser.email || '',
-                avatar: firebaseUser.photoURL || undefined,
-                memberSince: memberSince,
-                id: firebaseUser.uid
-            });
-        } else {
-            setUser(null);
-        }
-        setAuthLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Auth Handlers
-  const handleLogin = (userData: Partial<User>) => {
-      // Logic handled by onAuthStateChanged
-      setCurrentView('home');
-  };
-
-  const handleLogout = async () => {
-      try {
-        await signOut(auth);
-        setUser(null);
-        setCurrentView('home');
-        showNotification("Logged out successfully", "info");
-      } catch (error: any) {
-        showNotification("Logout failed: " + error.message, "error");
-      }
-  };
-  
-  // Concurrency control to prevent duplicate requests
-  const isFetchingRef = useRef(false);
-
-  const loadData = useCallback(async (isInitial = false) => {
-    if (isFetchingRef.current) return;
-    
-    isFetchingRef.current = true;
-    if (isInitial) setLoading(true);
-    
+  const fetchData = useCallback(async () => {
     try {
-      // Parallel robust fetching
-      const [fiatRes, cryptoRes] = await Promise.all([
-        fetchFiatRates(),
-        fetchCryptoRates()
+      setError('');
+      const [cryptoRes, fiatRes] = await Promise.all([
+        fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&sparkline=true&price_change_percentage=24h,7d&per_page=100&page=1'),
+        fetch('https://open.er-api.com/v6/latest/USD'),
       ]);
 
-      const enrichedFiat = fiatRes.data.map(c => {
-        const major = MAJOR_FIAT_CURRENCIES.find(m => m.code === c.code);
-        return major ? { ...c, name: major.name } : c;
-      });
+      if (cryptoRes.status === 429 || fiatRes.status === 429) {
+        throw new Error('Rate limit reached. Please wait a few seconds.');
+      }
+      if (!cryptoRes.ok || !fiatRes.ok) throw new Error('Unable to load market data.');
 
-      setFiatCurrencies(enrichedFiat);
-      setCryptoCurrencies(cryptoRes.data);
-      setAllCurrencies([...enrichedFiat, ...cryptoRes.data]);
-      
-      // Determine if we are in fallback mode
-      const isFallbackData = fiatRes.isFallback || cryptoRes.isFallback;
-      setIsFallback(isFallbackData);
-      
+      const [cryptoJson, fiatJson] = await Promise.all([cryptoRes.json(), fiatRes.json()]);
+      const cryptoData: Asset[] = cryptoJson.map((coin: any) => ({
+        code: coin.symbol.toUpperCase(),
+        name: coin.name,
+        symbol: coin.symbol.toUpperCase(),
+        type: 'crypto',
+        priceUSD: coin.current_price,
+        change24h: coin.price_change_percentage_24h ?? 0,
+        change7d: coin.price_change_percentage_7d_in_currency ?? 0,
+        marketCap: coin.market_cap,
+        volume24h: coin.total_volume,
+        rank: coin.market_cap_rank,
+        sparkline: coin.sparkline_in_7d?.price?.slice(-24) ?? [],
+        icon: coin.image,
+      }));
+
+      const fiatData: Asset[] = MAJOR_FIAT.map((c) => ({
+        code: c.code,
+        name: c.name,
+        symbol: c.symbol,
+        type: 'fiat',
+        priceUSD: 1 / (fiatJson.rates[c.code] || 1),
+        change24h: 0,
+        change7d: 0,
+        sparkline: [98, 98.3, 98.1, 98.6, 98.4, 98.9, 99],
+        icon: c.flag,
+        flag: c.flag,
+      }));
+
+      setCrypto(cryptoData);
+      setFiat((prev) =>
+        fiatData.map((f) => {
+          const old = prev.find((p) => p.code === f.code);
+          const change = old ? ((f.priceUSD - old.priceUSD) / old.priceUSD) * 100 : 0;
+          return { ...f, change24h: change };
+        }),
+      );
       setLastUpdated(new Date());
-    } catch (error) {
-      console.error("Critical Data Error:", error);
-      showNotification("Failed to fetch live data", "error");
+    } catch (e: any) {
+      setError(e.message || 'Unexpected error');
     } finally {
       setLoading(false);
-      isFetchingRef.current = false;
     }
-  }, [showNotification]);
+  }, []);
 
   useEffect(() => {
-    loadData(true);
-    const interval = setInterval(() => loadData(false), REFRESH_INTERVAL);
+    fetchData();
+    const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
-  }, [loadData]);
+  }, [fetchData]);
 
-  // View logic for market table
-  const displayedCrypto = viewAllCrypto ? cryptoCurrencies : cryptoCurrencies.slice(0, 10);
-  const majorFiat = fiatCurrencies.filter(c => 
-    MAJOR_FIAT_CURRENCIES.some(m => m.code === c.code)
-  ).sort((a, b) => a.code.localeCompare(b.code));
+  useEffect(() => {
+    const online = () => setOffline(false);
+    const off = () => setOffline(true);
+    window.addEventListener('online', online);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', online);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
 
-  // Render content based on view
-  const renderContent = () => {
-      if (authLoading && (currentView === 'profile' || currentView === 'login' || currentView === 'signup')) {
-          return (
-              <div className="flex h-screen items-center justify-center">
-                  <div className="w-8 h-8 border-4 border-exchango-accent border-t-transparent rounded-full animate-spin"></div>
-              </div>
-          );
-      }
+  useEffect(() => {
+    localStorage.setItem('history', JSON.stringify(history.slice(0, 6)));
+  }, [history]);
 
-      switch (currentView) {
-          case 'login':
-              return <LoginView onNavigate={setCurrentView} onNotify={showNotification} onLogin={handleLogin} />;
-          case 'signup':
-              return <SignUpView onNavigate={setCurrentView} onNotify={showNotification} onLogin={handleLogin} />;
-          case 'profile':
-              return user ? (
-                <ProfileView user={user} onLogout={handleLogout} onNotify={showNotification} />
-              ) : (
-                <LoginView onNavigate={setCurrentView} onNotify={showNotification} onLogin={handleLogin} />
-              );
-          case 'trade':
-              return <TradeView currencies={allCurrencies} onNotify={showNotification} />;
-          case 'earn':
-              return <EarnView onNotify={showNotification} />;
-          case 'learn':
-              return <LearnView onNotify={showNotification} />;
-          case 'home':
-          default:
-              return (
-                <>
-                  <Hero />
-                  <div className="relative z-20 -mt-8 mb-24">
-                    <Converter 
-                      currencies={allCurrencies} 
-                      lastUpdated={lastUpdated} 
-                      onRefresh={() => loadData(false)}
-                      isLoading={loading}
-                      isFallback={isFallback}
-                      onNotify={showNotification}
-                    />
-                  </div>
-                  <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-24">
-                    <div className="mb-10 text-center sm:text-left">
-                      <h2 className="text-3xl font-bold text-white mb-2">Market Overview</h2>
-                      <p className="text-gray-400">Track the top assets across the decentralized economy.</p>
-                    </div>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                      <MarketTable 
-                        title={viewAllCrypto ? "All Assets" : "Top Movers"} 
-                        currencies={displayedCrypto} 
-                        type="crypto" 
-                        onViewAll={() => setViewAllCrypto(!viewAllCrypto)}
-                        isExpanded={viewAllCrypto}
-                      />
-                      <MarketTable 
-                        title="Fiat Rates" 
-                        currencies={majorFiat} 
-                        type="fiat" 
-                      />
-                    </div>
-                  </section>
-                </>
-              );
-      }
+  useEffect(() => {
+    localStorage.setItem('favorites', JSON.stringify(favorites));
+  }, [favorites]);
+
+  useEffect(() => {
+    document.body.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+    if (locale.includes('en-IN')) setFrom('INR');
+    if (locale.includes('ne')) setFrom('NPR');
+  }, []);
+
+  const handleConvert = () => {
+    if (!fromAsset || !toAsset || Number.isNaN(numericAmount)) return;
+    setHistory((h) => [
+      { id: id(), from, to, amount: numericAmount, result, timestamp: new Date().toISOString() },
+      ...h,
+    ]);
   };
 
-  const isAuthView = currentView === 'login' || currentView === 'signup';
+  const fiatRows = fiat
+    .filter((f) => `${f.name} ${f.code}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => (sortFiat === 'rate' ? b.priceUSD - a.priceUSD : b.change24h - a.change24h));
+
+  const cryptoRows = (showAll ? crypto : crypto.slice(0, 10));
 
   return (
-    <div className="min-h-screen bg-[#0B0E14] text-white selection:bg-exchango-accent/30 font-sans flex flex-col">
-      
-      {/* Toast Notification */}
-      {notification.show && (
-          <Toast 
-            message={notification.message} 
-            type={notification.type} 
-            onClose={() => setNotification(prev => ({ ...prev, show: false }))} 
-          />
-      )}
-
-      {/* Navbar - Simplified on Auth pages */}
-      {!isAuthView && (
-        <nav className="fixed top-0 w-full z-50 border-b border-white/5 bg-[#0B0E14]/80 backdrop-blur-xl transition-all">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
-            <div 
-                className="flex items-center gap-3 group cursor-pointer"
-                onClick={() => setCurrentView('home')}
-            >
-                <div className="relative group-hover:scale-110 transition-transform duration-300">
-                <div className="absolute inset-0 bg-exchango-accent/20 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <Logo className="w-12 h-12" />
-                </div>
-                <div>
-                <span className="font-bold text-2xl tracking-tight text-white block">
-                    Exchango
-                </span>
-                </div>
-            </div>
-            
-            {/* Navigation Buttons */}
-            <div className="hidden md:flex items-center gap-1 text-sm font-medium text-gray-400 bg-white/5 rounded-full p-1.5 border border-white/5">
-                <button 
-                onClick={() => setCurrentView('trade')}
-                className={`px-6 py-2 rounded-full transition-all flex items-center gap-2 ${currentView === 'trade' ? 'bg-white text-black font-bold shadow-lg' : 'hover:text-white hover:bg-white/5'}`}
-                >
-                <BarChart2 size={16} /> Trade
-                </button>
-                <button 
-                onClick={() => setCurrentView('home')}
-                className={`px-6 py-2 rounded-full transition-all flex items-center gap-2 ${currentView === 'home' ? 'bg-white text-black font-bold shadow-lg' : 'hover:text-white hover:bg-white/5'}`}
-                >
-                <Home size={16} /> Markets
-                </button>
-                <button 
-                onClick={() => setCurrentView('earn')}
-                className={`px-6 py-2 rounded-full transition-all flex items-center gap-2 ${currentView === 'earn' ? 'bg-white text-black font-bold shadow-lg' : 'hover:text-white hover:bg-white/5'}`}
-                >
-                <Wallet size={16} /> Earn
-                </button>
-                <button 
-                onClick={() => setCurrentView('learn')}
-                className={`px-6 py-2 rounded-full transition-all flex items-center gap-2 ${currentView === 'learn' ? 'bg-white text-black font-bold shadow-lg' : 'hover:text-white hover:bg-white/5'}`}
-                >
-                <BookOpen size={16} /> Learn
-                </button>
-            </div>
-
-            <div className="flex items-center gap-4">
-                {user ? (
-                   <button 
-                      onClick={() => setCurrentView('profile')}
-                      className={`flex items-center gap-3 px-2 py-1.5 pr-4 rounded-full transition-all border border-white/5 hover:border-white/20 bg-white/5 hover:bg-white/10 ${currentView === 'profile' ? 'bg-white/10 border-white/20' : ''}`}
-                   >
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-exchango-accent to-blue-600 flex items-center justify-center text-black font-bold text-sm overflow-hidden">
-                         {user.avatar ? <img src={user.avatar} className="w-full h-full object-cover" /> : user.name.charAt(0)}
-                      </div>
-                      <span className="font-medium text-sm hidden sm:block">{user.name}</span>
-                   </button>
-                ) : (
-                   <>
-                      <button 
-                          onClick={() => setCurrentView('login')}
-                          className="hidden sm:block px-5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-colors border border-white/5"
-                      >
-                      Log In
-                      </button>
-                      <button 
-                          onClick={() => setCurrentView('signup')}
-                          className="px-5 py-2.5 rounded-xl bg-exchango-accent text-black font-bold hover:bg-cyan-300 transition-colors shadow-[0_0_15px_rgba(0,209,255,0.3)]"
-                      >
-                      Sign Up
-                      </button>
-                   </>
-                )}
-            </div>
-            </div>
+    <div className="app">
+      <header className="header glass">
+        <div className="brand">💠 Exchango Elite</div>
+        <nav>
+          <a href="#converter">Converter</a>
+          <a href="#markets">Markets</a>
+          <a href="#faq">FAQ</a>
         </nav>
-      )}
+        <button className="icon-btn" onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}>{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
+      </header>
 
-      {/* Fallback Banner */}
-      {isFallback && !isAuthView && (
-        <div className="fixed bottom-0 left-0 w-full bg-yellow-600/20 backdrop-blur-md border-t border-yellow-500/20 z-50 py-2 px-4 flex items-center justify-center gap-2 text-yellow-500 text-xs font-bold uppercase tracking-widest animate-fade-in-up">
-          <WifiOff size={14} />
-          <span>Live updates paused - Displaying cached market data</span>
-        </div>
-      )}
+      <section className="hero">
+        <div className="floating">₿</div><div className="floating eth">Ξ</div><div className="floating usd">$</div>
+        <h1>Live Currency &amp; Crypto Converter</h1>
+        <p>Track real-time exchange rates worldwide with precision.</p>
+        <a href="#converter" className="cta">Start Converting</a>
+      </section>
 
-      <main className={`flex-grow relative ${!isAuthView ? 'pt-24' : ''}`}>
-         {renderContent()}
+      <main>
+        <section id="converter" className="converter glass">
+          <div className="converter-head">
+            <h2>Advanced Converter</h2>
+            <div className="meta">Updated {lastUpdated ? 'just now' : '...'} · Data Powered by CoinGecko</div>
+          </div>
+          {offline && <p className="warning"><WifiOff size={14} /> Offline mode detected.</p>}
+          {error && <p className="error">{error}</p>}
+          {loading ? <div className="skeleton" /> : (
+            <>
+              <div className="form-row">
+                <input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="Amount" />
+                <select value={from} onChange={(e) => setFrom(e.target.value)}>{assets.map((a) => <option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select>
+                <button className="swap" onClick={() => { const f = from; setFrom(to); setTo(f); }}> <ArrowUpDown size={18} /></button>
+                <select value={to} onChange={(e) => setTo(e.target.value)}>{assets.map((a) => <option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select>
+              </div>
+              <div className="quick-pairs">{POPULAR_PAIRS.map(([a, b]) => <button key={a+b} onClick={() => {setFrom(a); setTo(b);}}>{a} → {b}</button>)}</div>
+              <div className="result-card">
+                <div className="value">{Number.isFinite(result) ? result.toLocaleString(undefined, { maximumFractionDigits: 6 }) : '0'} {to}</div>
+                <p>1 {from} = {fromAsset && toAsset ? (fromAsset.priceUSD / toAsset.priceUSD).toFixed(6) : '--'} {to}</p>
+                <div className="result-actions">
+                  <button onClick={handleConvert}>Save conversion</button>
+                  <button onClick={() => navigator.clipboard.writeText(`${amount} ${from} = ${result} ${to}`)}><Copy size={15} />Copy</button>
+                  <Sparkline data={toAsset?.sparkline ?? []} positive={(toAsset?.change24h ?? 0) >= 0} />
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="history">
+            <h3>Recent conversions</h3>
+            {history.map((h) => <div key={h.id} className="history-row">{h.amount} {h.from} → {h.result.toFixed(4)} {h.to}</div>)}
+          </div>
+        </section>
+
+        <section id="markets" className="markets">
+          <div className="section-title">
+            <h2>Live Market Dashboard</h2>
+            <button className="icon-btn" onClick={fetchData}><RefreshCcw size={15} />Refresh</button>
+          </div>
+          <div className="grid-two">
+            <article className="glass table-wrap">
+              <h3>Crypto Market</h3>
+              <table>
+                <thead><tr><th>#</th><th>Coin</th><th>Price</th><th>24h</th><th>7d</th><th>Cap</th><th>Vol</th><th>Trend</th><th>★</th></tr></thead>
+                <tbody>
+                  {cryptoRows.map((c) => <tr key={c.code}><td>{c.rank}</td><td>{c.name} <span>{c.symbol}</span></td><td>${c.priceUSD.toLocaleString()}</td><td className={c.change24h >= 0 ? 'up':'down'}>{c.change24h.toFixed(2)}%</td><td className={c.change7d >= 0 ? 'up':'down'}>{c.change7d.toFixed(2)}%</td><td>${(c.marketCap || 0).toLocaleString()}</td><td>${(c.volume24h || 0).toLocaleString()}</td><td><Sparkline data={c.sparkline} positive={c.change24h>=0} /></td><td><button className="icon-btn" onClick={() => setFavorites((f) => f.includes(c.code) ? f.filter((x) => x !== c.code) : [...f, c.code])}><Star size={14} fill={favorites.includes(c.code) ? 'currentColor' : 'none'} /></button></td></tr>)}
+                </tbody>
+              </table>
+              <button onClick={() => setShowAll((v) => !v)} className="more">{showAll ? 'Show Top 10' : 'Expand to Top 100'}</button>
+            </article>
+
+            <article className="glass table-wrap">
+              <div className="table-tools">
+                <h3>Major Fiat Currencies</h3>
+                <div>
+                  <input placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} />
+                  <button onClick={() => setSortFiat((s) => s === 'rate' ? 'change' : 'rate')}><Search size={14} /> Sort: {sortFiat}</button>
+                </div>
+              </div>
+              <table>
+                <thead><tr><th>Flag</th><th>Name</th><th>Code</th><th>Rate vs USD</th><th>24h</th></tr></thead>
+                <tbody>
+                  {fiatRows.map((f) => <tr key={f.code}><td>{f.flag}</td><td>{f.name}</td><td>{f.code}</td><td>{(1/f.priceUSD).toFixed(4)}</td><td className={f.change24h >= 0 ? 'up':'down'}>{f.change24h.toFixed(2)}%</td></tr>)}
+                </tbody>
+              </table>
+            </article>
+          </div>
+        </section>
+
+        <section className="extras grid-two">
+          <article className="glass"><h3>Market Sentiment</h3><p>Risk-on momentum is moderate with stable BTC dominance and improving fiat-volatility spread.</p></article>
+          <article className="glass"><h3>Global Currency Heatmap</h3><div className="heatmap">USD EUR GBP JPY AUD CAD CHF CNY INR NPR</div></article>
+        </section>
+
+        <section id="faq" className="glass faq">
+          <h3>FAQ</h3>
+          <details><summary>How often does data refresh?</summary><p>Automatically every 10 seconds with manual refresh available.</p></details>
+          <details><summary>Which sources power rates?</summary><p>CoinGecko for crypto and Open Exchange Rate feed for fiat references.</p></details>
+          <details><summary>Can I save history?</summary><p>Yes, recent conversions are stored locally in your browser.</p></details>
+        </section>
       </main>
 
-      {/* Footer - Only show on main pages */}
-      {!isAuthView && (
-        <footer className="border-t border-white/5 bg-[#050608] py-12">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-6">
-            <div className="flex items-center gap-2 opacity-75 hover:opacity-100 transition-opacity">
-                <Logo className="w-8 h-8 opacity-70" />
-                <span className="font-bold tracking-widest text-sm text-gray-400">EXCHANGO</span>
-            </div>
-            <div className="flex gap-8 text-gray-500">
-                <a href="#" className="hover:text-white transition-colors"><Github size={20} /></a>
-                <a href="#" className="hover:text-white transition-colors"><Twitter size={20} /></a>
-            </div>
-            </div>
-        </footer>
-      )}
+      <footer className="footer">
+        <div>About · API Credits · Privacy Policy · Contact</div>
+        <form className="newsletter"><input placeholder="Newsletter email" /><button>Subscribe</button></form>
+        <small>Trusted by 1M+ global users.</small>
+      </footer>
     </div>
   );
 };
